@@ -1,0 +1,38 @@
+# Sotā Engine — .gitignore
+# Zero segredos/dados ao GitHub. Bloqueia TUDO; libera só o motor (a receita).
+
+# 1) bloqueia tudo
+*
+
+# 2) reabre só o que é seguro versionar (o motor)
+!.gitignore
+!*.py
+!*.sh
+!*.template
+!README*.md
+!Glossario_v5.csv
+!requirements.txt
+
+# 3) reforço explícito — NUNCA volta, mesmo se um '!' acima tentar liberar
+run_hifi.sh
+keys/
+cookies.txt
+*.key
+*.age
+*.session
+archive/
+workspace/
+deliverables/
+cache/
+whisper_models/
+Applio/
+EXPORTS_TO_WORLD/
+Troupe_BJJ/
+CONTEXTO/
+DEPRECATED/
+*.mp4
+*.wav
+*.webp
+*.srt
+*.json
+glossario_v5.csv
