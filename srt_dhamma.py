@@ -12,6 +12,18 @@
 # - [ ] Guias fonéticos para termos Pāli (Ruby annotations)
 # - [ ] compute_attention_score com audio_energy (precisa do áudio)
 # - [ ] Spaced repetition cues (marcar termo já visto antes)
+#
+# CAMADA DE REVISÃO HUMANA — INDISPENSÁVEL (casos reais, vídeo UBIjZTOh6Pc):
+# A máquina acerta a estrutura; o humano nativo pega a nuance. Exemplos:
+# 1. ASR+tradução em cascata: Prof. diz "No?" (não?) → Whisper "No" →
+#    DeepL interpreta como abreviação de "number" → "N.º". Erro invisível
+#    a qualquer glossário — exige ouvido humano.
+# 2. Alusão cultural: "lamp" (a lâmpada do gênio do Aladdin, metáfora) →
+#    DeepL traduz literal "abajur". Tecnicamente certo, contextualmente errado.
+#    Exige entender a alusão — só humano.
+# → A revisão humana (Abelha nativa / técnico Jetha) NÃO é polimento opcional.
+#   É a camada que transforma "tradução correta" em "Dhamma fiel".
+#   Esta é a inversão: máquina escala, humano garante fidelidade.
 # ============================================================
 """
 srt_dhamma.py — SRT post-processor Dhamma-aware para vitrine YouTube.
