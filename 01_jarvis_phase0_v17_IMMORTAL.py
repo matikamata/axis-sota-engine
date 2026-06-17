@@ -32,7 +32,8 @@ DEFAULT_PALI_PROMPT = (
     "jāti, anicca, dukkha, anattā, Nibbāna, saṅkhāra, "
     "paṭicca-samuppāda, kamma, cetanā, vedanā, taṇhā, "
     "avijjā, Sotāpanna, Dhamma, Buddha, Sutta, Pāli, "
-    "Abhidhamma, mettā, karuṇā, paññā, sīla, samādhi"
+    "Abhidhamma, mettā, karuṇā, paññā, sīla, samādhi, "
+    "Chanda, chanda, Dosa, dosa, Moha, moha, Lobha, lobha, Bhaya, bhaya"
 )
 
 VERIFIED_CHANNELS = {
