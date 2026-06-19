@@ -264,16 +264,17 @@ def process(path_in, path_out, pali_set):
         target_dur = len(text) / cps_target
         next_start = segs[i+1]['start'] if i+1 < n else seg['end'] + 10.0
         ideal_end  = seg['start'] + target_dur
-        capped_end = min(ideal_end, next_start - MIN_GAP)
-        new_end    = max(capped_end, seg['start'] + MIN_DUR)
+        hard_cap   = next_start - MIN_GAP           # nunca cruza para dentro do próximo seg
+        capped_end = min(ideal_end, hard_cap)
+        new_end    = min(max(capped_end, seg['start'] + MIN_DUR), hard_cap)
 
         if new_end > seg['end']:
             gained = new_end - seg['end']
             locked = False
         else:
-            new_end = seg['end']   # nunca encolhe
+            new_end = min(seg['end'], hard_cap)     # encolhe se necessário para fechar overlap
             gained  = 0.0
-            locked  = (ideal_end > seg['end'])   # queria crescer mas não deu
+            locked  = (ideal_end > new_end)
 
         seg['end'] = new_end
         new_dur    = seg['end'] - seg['start']
