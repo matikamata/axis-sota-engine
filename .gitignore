@@ -12,6 +12,7 @@
 !README*.md
 !Glossario_v5.csv
 !requirements.txt
+!*.nix
 
 # 3) reforço explícito — NUNCA volta, mesmo se um '!' acima tentar liberar
 run_hifi.sh
