@@ -429,7 +429,8 @@ def main():
     ap.add_argument("--glossary", help="CSV de glossário (1ª coluna = termos)")
     ap.add_argument("--no-glossary", action="store_true",
                     help="Roda SEM prompt de glossário (p/ isolar erros de prompt)")
-    ap.add_argument("--out", default=".", help="Diretório de saída")
+    ap.add_argument("--out", default=None,
+                    help="Diretório de saída (default: trabalho/<video_id>/)")
     ap.add_argument("--keep-json", action="store_true",
                     help="Salvar o JSON bruto (proveniência p/ a Base Purificada)")
     args = ap.parse_args()
@@ -464,6 +465,18 @@ def main():
             stem = Path(audio).stem
         print(f"[áudio] {audio} ({os.path.getsize(audio)/1e6:.1f} MB)")
 
+        # FLUXO HUMANO: cada vídeo vive em trabalho/<video_id>/ com passos
+        # numerados (1_audio → 2_rascunho → 3_revisado → 4_selado). Acaba o
+        # "onde está o quê". --out sobrescreve se você quiser outro lugar.
+        out_dir = Path(args.out) if args.out else Path("trabalho") / stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1_audio: preserva o áudio na pasta do vídeo (você não perde mais)
+        audio_keep = out_dir / "1_audio.flac"
+        import shutil
+        shutil.copy2(audio, audio_keep)
+        print(f"[1_audio] {audio_keep}")
+
         # 2) Chunking só se necessário
         if os.path.getsize(audio) > MAX_BYTES:
             chunks = chunk_audio(audio, workdir)
@@ -486,17 +499,14 @@ def main():
             print(f"[groq] transcrevendo offset={offset:.0f}s ({size/1e6:.1f}MB) ...")
             results.append((transcribe(client, path, args.language, prompt), offset))
 
-        # 4) Remontagem -> SRT
         # 4) Remontagem -> cues (re-fluxo por palavra + filtro de alucinação)
         cues, flagged = build_cues(results)
         srt = segments_to_srt(cues)
 
-        # 5) Saída
-        out_dir = Path(args.out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        srt_path = out_dir / f"{stem}.srt"
+        # 5) Saída — 2_rascunho.* (o que a Abelha vai revisar)
+        srt_path = out_dir / "2_rascunho.srt"
         srt_path.write_text(srt, encoding="utf-8")
-        print(f"[ok] SRT salvo: {srt_path} ({len(cues)} cues)")
+        print(f"[2_rascunho] SRT salvo: {srt_path} ({len(cues)} cues)")
 
         # Alucinações detectadas e removidas (revisão prioritária da Abelha)
         if flagged:
@@ -505,18 +515,33 @@ def main():
             for f in flagged:
                 print(f"        {srt_time(f['start'])}  \"{f['text'][:50]}\" "
                       f"(p={f['no_speech_prob']:.2f})")
-            flag_path = out_dir / f"{stem}.flagged.json"
+            flag_path = out_dir / "2_rascunho.flagged.json"
             flag_path.write_text(
                 json.dumps(flagged, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"[ok] Suspeitos salvos: {flag_path}")
 
         if args.keep_json:
-            json_path = out_dir / f"{stem}.words.json"
+            json_path = out_dir / "2_rascunho.words.json"
             json_path.write_text(
                 json.dumps([r for r, _ in results], ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             print(f"[ok] JSON bruto salvo: {json_path}")
+
+        # _meta.json — a jornada (proveniência do fluxo, base p/ 3_revisado e 4_selado)
+        meta = {
+            "video_id": stem,
+            "source": args.url or args.audio,
+            "language": args.language,
+            "glossary_terms": len(terms),
+            "cues": len(cues),
+            "hallucinations_removed": len(flagged),
+            "engine": "sara_engine",
+            "stage": "2_rascunho",
+        }
+        (out_dir / "_meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[ok] pasta de trabalho: {out_dir}/")
 
 
 if __name__ == "__main__":

@@ -9,11 +9,10 @@
 !*.py
 !*.sh
 !*.template
-!README*.md
+!*.md
 !Glossario_v5.csv
 !requirements.txt
 !*.nix
-!crystallize/
 
 # 3) reforço explícito — NUNCA volta, mesmo se um '!' acima tentar liberar
 run_hifi.sh
@@ -32,6 +31,8 @@ EXPORTS_TO_WORLD/
 Troupe_BJJ/
 CONTEXTO/
 DEPRECATED/
+trabalho/
+_ARCHIVE/
 *.mp4
 *.wav
 *.webp
