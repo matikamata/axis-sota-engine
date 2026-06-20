@@ -51,6 +51,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+_HERE = Path(__file__).parent
+_YTDLP_BIN = str(_HERE / ".ytdlp-venv" / "bin" / "yt-dlp")
+if not Path(_YTDLP_BIN).exists():
+    _YTDLP_BIN = "yt-dlp"
+
 # ----------------------------------------------------------------------
 # CONFIGURAÇÃO
 # ----------------------------------------------------------------------
@@ -136,7 +141,7 @@ def extract_audio(url, outdir):
     """
     out_tmpl = str(Path(outdir) / "raw.%(ext)s")
     run([
-        "yt-dlp", "-x", "--audio-format", "flac",
+        _YTDLP_BIN, "-x", "--audio-format", "flac",
         "--no-playlist", "-o", out_tmpl, url,
     ])
     raw = sorted(Path(outdir).glob("raw.*"))
@@ -144,7 +149,7 @@ def extract_audio(url, outdir):
         raise RuntimeError("Extração não produziu áudio")
     # Pega o id do vídeo para nomear a saída final
     vid = subprocess.run(
-        ["yt-dlp", "--no-playlist", "--print", "%(id)s", url],
+        [_YTDLP_BIN, "--no-playlist", "--print", "%(id)s", url],
         capture_output=True, text=True,
     ).stdout.strip() or "audio"
     final = str(Path(outdir) / f"{vid}.flac")
