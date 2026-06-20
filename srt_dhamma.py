@@ -47,7 +47,9 @@ from collections import Counter
 MAX_CHARS_LINE        = 42    # chars/linha (Netflix/YouTube standard)
 MIN_DUR               = 1.2   # duração mínima após extensão (segundos)
 MIN_GAP               = 0.050 # respiro entre segmentos consecutivos
-CPS_THRESHOLD_DEFAULT = 25.0  # CPS acima do qual o cue é marcado suspeito
+CPS_THRESHOLD_DEFAULT  = 25.0  # CPS acima do qual o cue é marcado suspeito
+GHOST_MAX_DUR_DEFAULT  = 0.3   # seg; abaixo disto + CPS alto = ghost_cue
+                                # (texto fisicamente impossível — não fala rápida)
 
 # Scripts não-latinos = alucinação quase certa quando language=en.
 # Detecção por prefixo de unicodedata.name() — stdlib, sem deps.
@@ -89,11 +91,15 @@ def compute_cps(text: str, start: float, end: float):
         return None, "zero_duration"
     return _visible_char_count(text) / dur, None
 
-def cps_verdict(cps_val, cps_reason, threshold: float = CPS_THRESHOLD_DEFAULT):
-    """Retorna (suspect: bool, reason_str|None)."""
+def cps_verdict(cps_val, cps_reason, threshold: float = CPS_THRESHOLD_DEFAULT,
+                dur=None, ghost_max_dur: float = GHOST_MAX_DUR_DEFAULT):
+    """Retorna (suspect: bool, reason_str|None).
+    ghost_cue re-labela subset de cps_high (dur ínfima) — não muda o count."""
     if cps_reason == "zero_duration":
         return True, "zero_duration"
     if cps_val is not None and cps_val > threshold:
+        if dur is not None and 0 < dur < ghost_max_dur:
+            return True, "ghost_cue"
         return True, "cps_high"
     return False, None
 
@@ -314,7 +320,8 @@ def fmt_ts(s):
 
 def process(path_in, path_out, pali_set,
             cps_threshold: float = CPS_THRESHOLD_DEFAULT,
-            foreign_min_chars: int = FOREIGN_MIN_CHARS_DEFAULT):
+            foreign_min_chars: int = FOREIGN_MIN_CHARS_DEFAULT,
+            ghost_max_dur: float = GHOST_MAX_DUR_DEFAULT):
     segs               = parse_srt(path_in)
     n                  = len(segs)
     total_dur          = segs[-1]['end'] if segs else 1.0
@@ -326,9 +333,12 @@ def process(path_in, path_out, pali_set,
     for i, seg in enumerate(segs):
         text = seg['text']
 
-        # ── CPS + script estrangeiro: MESMO ponto "before" — segmento bruto ──
+        # ── CPS + ghost + script estrangeiro: MESMO ponto "before" — segmento bruto ──
+        dur_raw = seg['end'] - seg['start']
         cps_val, cps_reason = compute_cps(text, seg['start'], seg['end'])
-        cps_suspect, cps_reason_str = cps_verdict(cps_val, cps_reason, cps_threshold)
+        cps_suspect, cps_reason_str = cps_verdict(
+            cps_val, cps_reason, cps_threshold, dur_raw, ghost_max_dur
+        )
         if cps_val is not None:
             cps_all.append(cps_val)
         if cps_suspect:
@@ -488,6 +498,9 @@ def main():
     ap.add_argument("--foreign-min-chars", type=int, default=FOREIGN_MIN_CHARS_DEFAULT,
                     metavar="N",
                     help=f"Mín letras estrangeiras para marcar suspeito (default: {FOREIGN_MIN_CHARS_DEFAULT})")
+    ap.add_argument("--ghost-max-dur", type=float, default=GHOST_MAX_DUR_DEFAULT,
+                    metavar="S",
+                    help=f"Dur máx (s) p/ classificar como ghost_cue (default: {GHOST_MAX_DUR_DEFAULT})")
     args = ap.parse_args()
 
     path_in  = Path(args.input)
@@ -507,11 +520,18 @@ def main():
         str(path_in), str(path_out), pali_set,
         cps_threshold=args.cps_threshold,
         foreign_min_chars=args.foreign_min_chars,
+        ghost_max_dur=args.ghost_max_dur,
     )
     print(f"Escrito: {path_out}  ({len(segs)} segmentos)")
     if cps_report["cps_suspect_count"]:
+        n_ghost = sum(1 for e in cps_report["cps_suspect_cues"] if e["reason"] == "ghost_cue")
+        n_high  = sum(1 for e in cps_report["cps_suspect_cues"] if e["reason"] == "cps_high")
         print(f"  [CPS] {cps_report['cps_suspect_count']} cues suspeitos "
               f"(>{args.cps_threshold:.0f} CPS)  máx={cps_report['cps_max']}")
+        if n_ghost:
+            print(f"    ghost_cue (dur<{args.ghost_max_dur}s): {n_ghost}")
+        if n_high:
+            print(f"    cps_high  (fala rápida):    {n_high}")
     if foreign_report["foreign_script_count"]:
         scripts = set(s for e in foreign_report["foreign_script_cues"] for s in e["scripts"])
         print(f"  [FOREIGN] {foreign_report['foreign_script_count']} cues "
