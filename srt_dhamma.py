@@ -35,7 +35,7 @@ A máquina acerta a estrutura; o humano nativo pega a nuance. Exemplos:
   É a camada que transforma "tradução correta" em "Dhamma fiel".
   Esta é a inversão: máquina escala, humano garante fidelidade.
 """
-import re, os, csv, argparse
+import re, os, csv, argparse, unicodedata
 from pathlib import Path
 from collections import Counter
 
@@ -44,9 +44,24 @@ from collections import Counter
 # CONFIGURAÇÃO
 # ──────────────────────────────────────────────
 
-MAX_CHARS_LINE = 42      # chars/linha (Netflix/YouTube standard)
-MIN_DUR        = 1.2     # duração mínima após extensão (segundos)
-MIN_GAP        = 0.050   # respiro entre segmentos consecutivos
+MAX_CHARS_LINE        = 42    # chars/linha (Netflix/YouTube standard)
+MIN_DUR               = 1.2   # duração mínima após extensão (segundos)
+MIN_GAP               = 0.050 # respiro entre segmentos consecutivos
+CPS_THRESHOLD_DEFAULT = 25.0  # CPS acima do qual o cue é marcado suspeito
+
+# Scripts não-latinos = alucinação quase certa quando language=en.
+# Detecção por prefixo de unicodedata.name() — stdlib, sem deps.
+_FOREIGN_SCRIPT_HINTS = (
+    "CJK", "HIRAGANA", "KATAKANA", "HANGUL",
+    "CYRILLIC", "GREEK", "ARABIC", "HEBREW",
+    "DEVANAGARI", "BENGALI", "TAMIL", "TELUGU",
+    "THAI", "LAO", "MYANMAR", "GEORGIAN", "ARMENIAN",
+    # "SINHALA",  # DECISÃO HUMANA: universo é EN-only e alucinação clássica do Whisper
+    #             # em silêncio puxa línguas de alto-recurso, não Sinhala. Incluir
+    #             # arriscaria sinalizar nomes próprios legítimos. Descomentar só com
+    #             # autorização explícita (Mātikamātā / Monge).
+)
+FOREIGN_MIN_CHARS_DEFAULT = 1  # em talk EN romanizado: 0 letras estrangeiras esperadas
 
 # CPS-alvo por intent — menor = mais tempo de tela
 CPS_BY_INTENT = {
@@ -57,6 +72,60 @@ CPS_BY_INTENT = {
     "APPLICATION": 13,  # imperativo/prática — ritmo narrativo
     "BUILD":       16,  # construção/transição — pode ser mais rápido
 }
+
+# ──────────────────────────────────────────────
+# FILTRO CPS-SUSPEITO
+# ──────────────────────────────────────────────
+
+def _visible_char_count(text: str) -> int:
+    """Caracteres visíveis após NFC — ā/ī/ū Pāli contam como 1, não 2."""
+    norm = unicodedata.normalize("NFC", text)
+    return len(" ".join(norm.split()))
+
+def compute_cps(text: str, start: float, end: float):
+    """Retorna (cps_float|None, reason_str|None). None = duração zero."""
+    dur = end - start
+    if dur <= 0:
+        return None, "zero_duration"
+    return _visible_char_count(text) / dur, None
+
+def cps_verdict(cps_val, cps_reason, threshold: float = CPS_THRESHOLD_DEFAULT):
+    """Retorna (suspect: bool, reason_str|None)."""
+    if cps_reason == "zero_duration":
+        return True, "zero_duration"
+    if cps_val is not None and cps_val > threshold:
+        return True, "cps_high"
+    return False, None
+
+
+# ──────────────────────────────────────────────
+# FILTRO SCRIPT ESTRANGEIRO
+# ──────────────────────────────────────────────
+
+def foreign_script_scan(text: str):
+    """Conta letras de script não-latino. Pāli (LATIN+diacrítico) nunca
+    dispara: NFC + filtro category 'L' + prefixo do nome Unicode.
+    Retorna (count: int, scripts: sorted list[str])."""
+    norm = unicodedata.normalize("NFC", text)
+    count = 0
+    scripts: set = set()
+    for ch in norm:
+        if unicodedata.category(ch)[0] != "L":   # só LETRAS
+            continue
+        try:
+            name = unicodedata.name(ch)
+        except ValueError:
+            continue
+        for hint in _FOREIGN_SCRIPT_HINTS:
+            if name.startswith(hint):
+                count += 1
+                scripts.add(hint)
+                break
+    return count, sorted(scripts)
+
+def foreign_verdict(count: int, min_chars: int = FOREIGN_MIN_CHARS_DEFAULT) -> bool:
+    return count >= min_chars
+
 
 PALI_DIACRITICS = re.compile(r'[āīūṭḍṇḷṃṅñśṣḥ]')
 
@@ -243,14 +312,46 @@ def fmt_ts(s):
 # PIPELINE PRINCIPAL
 # ──────────────────────────────────────────────
 
-def process(path_in, path_out, pali_set):
-    segs        = parse_srt(path_in)
-    n           = len(segs)
-    total_dur   = segs[-1]['end'] if segs else 1.0
-    seg_reports = []
+def process(path_in, path_out, pali_set,
+            cps_threshold: float = CPS_THRESHOLD_DEFAULT,
+            foreign_min_chars: int = FOREIGN_MIN_CHARS_DEFAULT):
+    segs               = parse_srt(path_in)
+    n                  = len(segs)
+    total_dur          = segs[-1]['end'] if segs else 1.0
+    seg_reports        = []
+    cps_suspect_cues:   list = []
+    cps_all:            list = []
+    foreign_script_cues: list = []
 
     for i, seg in enumerate(segs):
-        text           = seg['text']
+        text = seg['text']
+
+        # ── CPS + script estrangeiro: MESMO ponto "before" — segmento bruto ──
+        cps_val, cps_reason = compute_cps(text, seg['start'], seg['end'])
+        cps_suspect, cps_reason_str = cps_verdict(cps_val, cps_reason, cps_threshold)
+        if cps_val is not None:
+            cps_all.append(cps_val)
+        if cps_suspect:
+            cps_suspect_cues.append({
+                "cue_index": i + 1,
+                "start":     seg['start'],
+                "end":       seg['end'],
+                "chars":     _visible_char_count(text),
+                "cps":       round(cps_val, 2) if cps_val is not None else None,
+                "reason":    cps_reason_str,
+            })
+
+        f_count, f_scripts = foreign_script_scan(text)
+        if foreign_verdict(f_count, foreign_min_chars):
+            foreign_script_cues.append({
+                "cue_index":     i + 1,
+                "start":         seg['start'],
+                "end":           seg['end'],
+                "foreign_chars": f_count,
+                "scripts":       f_scripts,
+                "reason":        "foreign_script",
+            })
+
         position_ratio = seg['start'] / total_dur if total_dur > 0 else 0
         pali_found     = detect_pali_in_text(text, pali_set)
         intent         = classify_intent_dhamma(text, position_ratio, pali_found)
@@ -304,7 +405,18 @@ def process(path_in, path_out, pali_set):
         for i, seg in enumerate(segs, 1):
             f.write(f"{i}\n{fmt_ts(seg['start'])} --> {fmt_ts(seg['end'])}\n{seg['display']}\n\n")
 
-    return seg_reports, segs
+    cps_report = {
+        "cps_threshold":     cps_threshold,
+        "cps_suspect_count": len(cps_suspect_cues),
+        "cps_max":           round(max(cps_all), 2) if cps_all else None,
+        "cps_suspect_cues":  cps_suspect_cues,
+    }
+    foreign_report = {
+        "foreign_min_chars":    foreign_min_chars,
+        "foreign_script_count": len(foreign_script_cues),
+        "foreign_script_cues":  foreign_script_cues,
+    }
+    return seg_reports, segs, cps_report, foreign_report
 
 
 # ──────────────────────────────────────────────
@@ -370,6 +482,12 @@ def main():
                     help="SRT de saída (default: <input_stem>.dhamma.srt ao lado do input)")
     ap.add_argument("--report",   action="store_true",
                     help="Exibe histograma de intents e amostras")
+    ap.add_argument("--cps-threshold", type=float, default=CPS_THRESHOLD_DEFAULT,
+                    metavar="N",
+                    help=f"CPS acima do qual marcar cue suspeito (default: {CPS_THRESHOLD_DEFAULT})")
+    ap.add_argument("--foreign-min-chars", type=int, default=FOREIGN_MIN_CHARS_DEFAULT,
+                    metavar="N",
+                    help=f"Mín letras estrangeiras para marcar suspeito (default: {FOREIGN_MIN_CHARS_DEFAULT})")
     args = ap.parse_args()
 
     path_in  = Path(args.input)
@@ -385,8 +503,19 @@ def main():
         print(f"[ERRO] Input não encontrado: {path_in}")
         raise SystemExit(1)
 
-    seg_reports, segs = process(str(path_in), str(path_out), pali_set)
+    seg_reports, segs, cps_report, foreign_report = process(
+        str(path_in), str(path_out), pali_set,
+        cps_threshold=args.cps_threshold,
+        foreign_min_chars=args.foreign_min_chars,
+    )
     print(f"Escrito: {path_out}  ({len(segs)} segmentos)")
+    if cps_report["cps_suspect_count"]:
+        print(f"  [CPS] {cps_report['cps_suspect_count']} cues suspeitos "
+              f"(>{args.cps_threshold:.0f} CPS)  máx={cps_report['cps_max']}")
+    if foreign_report["foreign_script_count"]:
+        scripts = set(s for e in foreign_report["foreign_script_cues"] for s in e["scripts"])
+        print(f"  [FOREIGN] {foreign_report['foreign_script_count']} cues "
+              f"com script estrangeiro: {', '.join(sorted(scripts))}")
 
     if args.report:
         print_report(str(path_out), seg_reports, segs)
